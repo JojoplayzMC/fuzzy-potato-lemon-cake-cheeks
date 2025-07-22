@@ -1,0 +1,113 @@
+-- display_renderer.lua
+-- This script runs on an Advanced Monitor connected via a network cable.
+-- It listens for movie frame data from a connected computer and renders it.
+
+-- Initialize rednet (network communication)
+local modem = peripheral.find("modem")
+if not modem then
+    error("No modem found! Please connect a wired modem to the computer.")
+end
+rednet.open("bottom") -- Assuming the network cable is connected to the bottom of the display
+
+-- Get the advanced monitor peripheral
+local monitor = peripheral.find("monitor")
+if not monitor then
+    error("No advanced monitor found! Please ensure this script is run on an advanced monitor.")
+end
+
+-- Redirect terminal output to the monitor for drawing
+term.redirect(monitor)
+
+-- Check monitor dimensions (should be 8x5 as per movie specification)
+local width, height = monitor.getSize()
+if width ~= 8 or height ~= 5 then
+    term.clear()
+    term.setCursorPos(1,1)
+    term.setTextColor(colors.red)
+    term.setBackgroundColor(colors.black)
+    term.write(string.format("Monitor %dx%d!", width, height))
+    term.setCursorPos(1,2)
+    term.write("Expected 8x5.")
+    term.sync()
+    error(string.format("Monitor size is %dx%d, but movie expects 8x5. Please use an 8x5 advanced monitor.", width, height))
+end
+
+-- Display a "Ready" message on the monitor and print its ID
+term.clear()
+term.setCursorPos(1,1)
+term.setTextColor(colors.white)
+term.setBackgroundColor(colors.black)
+term.write("Display Ready.")
+term.setCursorPos(1,2)
+term.write("ID: "..rednet.host())
+term.sync()
+
+print("Display Renderer ready. Broadcasting ID...")
+-- Broadcast its ID so the player can find it using a specific protocol
+local PROTOCOL = "movie_protocol"
+rednet.broadcast("DISPLAY_READY", PROTOCOL)
+
+-- Function to render a single frame on the monitor
+function renderFrame(frame_data)
+    term.clear() -- Clear the entire display for the new frame
+
+    -- Split the incoming frame_data string into individual rows
+    local rows = {}
+    for line in frame_data:gmatch("([^\n]+)") do
+        table.insert(rows, line)
+    end
+
+    -- Iterate through each row and pixel to draw it
+    for y = 1, #rows do -- Lua tables are 1-indexed
+        local row_str = rows[y]
+        -- Split the row string into pixel color indices
+        local pixels = {}
+        for color_str in row_str:gmatch("([^,]+)") do
+            table.insert(pixels, tonumber(color_str)) -- Convert string to number
+        end
+
+        for x = 1, #pixels do
+            local color_index = pixels[x]
+            -- Set background color for the pixel. CC:Tweaked advanced displays use 0-23.
+            -- Add a check for valid color indices to prevent errors.
+            if color_index >= 0 and color_index <= 23 then
+                term.setBackgroundColor(color_index)
+            else
+                -- Fallback for invalid colors (e.g., black)
+                term.setBackgroundColor(0)
+            end
+            term.setCursorPos(x, y) -- Move cursor to pixel position (x, y)
+            term.write(" ") -- Write a space to fill the pixel with the background color
+        end
+    end
+    term.sync() -- Ensure all changes are drawn to the monitor
+end
+
+-- Main loop to listen for messages from the player computer
+while true do
+    -- Wait for any rednet message
+    local id, message, protocol = rednet.receive()
+
+    -- Check if the message is for our movie protocol
+    if protocol == PROTOCOL then
+        if message == "STOP" then
+            print("Received STOP signal. Shutting down.")
+            term.clear()
+            term.setCursorPos(1,1)
+            term.setTextColor(colors.white)
+            term.setBackgroundColor(colors.black)
+            term.write("Display Offline")
+            term.sync()
+            break -- Exit the loop and stop the script
+        else
+            -- Assume the message is frame data and render it
+            renderFrame(message)
+        end
+    elseif message == "PING_DISPLAY_RENDERER" then
+        -- Respond to pings from potential players to announce readiness
+        rednet.send(id, "DISPLAY_READY", PROTOCOL)
+    end
+end
+
+-- Restore terminal to default (optional, but good practice when script ends)
+term.restore()
